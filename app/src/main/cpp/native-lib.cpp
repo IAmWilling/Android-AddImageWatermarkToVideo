@@ -33,6 +33,9 @@ void i420ToPng(uint8_t *i420);
 
 void frameToPng(AVFrame *frame, const char *png_path);
 
+void mirrorI420(uint8_t *src_i420_data, jint width, jint height, uint8_t *dst_i420_data);
+
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_mt_mediacodec2demo_MainActivity_stringFromJNI(
         JNIEnv *env,
@@ -221,10 +224,14 @@ Java_com_mt_mediacodec2demo_MainActivity_native_1filter(JNIEnv *env, jobject thi
                       i420_frame->data, i420_frame->linesize);
 
 
+
             uint8_t *i420_data = (uint8_t *) malloc(y_size * 3 / 2);
             memcpy(i420_data, i420_frame->data[0], y_size);
             memcpy(i420_data + y_size, i420_frame->data[1], uv_size);
             memcpy(i420_data + y_size + uv_size, i420_frame->data[2], uv_size);
+//            uint8_t *i420_data_mirror = (uint8_t *) malloc(y_size * 3 / 2);
+            // 水平镜像处理
+//            mirrorI420(i420_data,width,height,i420_data_mirror);
 //            i420ToPng(i420_data);
 //            frameToPng(filter_frame,"/data/user/0/com.mt.mediacodec2demo/files/filter_test.png");
             jbyteArray array_nv12 = env->NewByteArray(y_size * 3 / 2);
@@ -235,6 +242,7 @@ Java_com_mt_mediacodec2demo_MainActivity_native_1filter(JNIEnv *env, jobject thi
             env->CallVoidMethod(i_native_callback, mid, array_nv12);
             array = array_nv12;
             free(i420_data);
+//            free(i420_data_mirror);
             av_frame_free(&i420_frame);
             free(out_buf);
             sws_freeContext(img_ctx);
@@ -443,6 +451,35 @@ void nv21ToI420(jbyte *src_nv21_data, jint width, jint height, jbyte *src_i420_d
                        (uint8_t *) src_i420_v_data, width >> 1,
                        width, height);
 }
+
+
+// 镜像
+void mirrorI420(uint8_t *src_i420_data, jint width, jint height, uint8_t *dst_i420_data) {
+    jint src_i420_y_size = width * height;
+    // jint src_i420_u_size = (width >> 1) * (height >> 1);
+    jint src_i420_u_size = src_i420_y_size >> 2;
+
+    uint8_t *src_i420_y_data = src_i420_data;
+    uint8_t *src_i420_u_data = src_i420_data + src_i420_y_size;
+    uint8_t *src_i420_v_data = src_i420_data + src_i420_y_size + src_i420_u_size;
+
+    uint8_t *dst_i420_y_data = dst_i420_data;
+    uint8_t *dst_i420_u_data = dst_i420_data + src_i420_y_size;
+    uint8_t *dst_i420_v_data = dst_i420_data + src_i420_y_size + src_i420_u_size;
+
+    libyuv::I420Mirror((const uint8_t *) src_i420_y_data, width,
+                       (const uint8_t *) src_i420_u_data, width >> 1,
+                       (const uint8_t *) src_i420_v_data, width >> 1,
+                       (uint8_t *) dst_i420_y_data, width,
+                       (uint8_t *) dst_i420_u_data, width >> 1,
+                       (uint8_t *) dst_i420_v_data, width >> 1,
+                       width, height);
+}
+
+
+
+
+
 
 extern "C"
 JNIEXPORT void JNICALL
