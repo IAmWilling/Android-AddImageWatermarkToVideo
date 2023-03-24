@@ -14,6 +14,7 @@ import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
+import android.media.MediaMetadataRetriever;
 import android.media.MediaMuxer;
 import android.media.MediaPlayer;
 import android.os.Bundle;
@@ -22,6 +23,7 @@ import android.os.HandlerThread;
 import android.util.Log;
 import android.widget.MediaController;
 import android.widget.ProgressBar;
+import android.widget.SeekBar;
 import android.widget.Toast;
 
 import com.mt.mediacodec2demo.databinding.ActivityMainBinding;
@@ -79,12 +81,15 @@ public class MainActivity extends AppCompatActivity {
     private final MediaExtractor mAudioMediaExtractor = new MediaExtractor();
     //音频流数据缓冲区
     private ByteBuffer mAudioByteBuffer;
+    private int mVideoSrcWidth, mVideoSrcHeight;
+
     private int mAudioTrackIndex = -1;
     private boolean isMediaMuxerStatr = false;
     long startTime = System.nanoTime();
     long endTime = System.nanoTime();
     long duration = (endTime - startTime) / 1000000000;
     private String filterPath;
+    MediaMetadataRetriever mediaMetadataRetriever = new MediaMetadataRetriever();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -96,11 +101,13 @@ public class MainActivity extends AppCompatActivity {
         copyAssetsToLogoPath();
         String path = getFilesDir().getAbsolutePath() + "/" + M_FILE_NAME;
         String logoPath = getFilesDir().getAbsolutePath() + "/logo.jpeg";
+        String testPng = getFilesDir().getAbsolutePath() + "/test.png";
         filterPath = getFilesDir().getAbsolutePath() + "/filter_test.mp4";
         File png = new File(filterPath);
         try {
             png.delete();
             png.createNewFile();
+            new File(testPng).createNewFile();
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -115,6 +122,32 @@ public class MainActivity extends AppCompatActivity {
         mAudioByteBuffer = ByteBuffer.allocate(mAudioDecodeMediaFormat.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE));
         startTime = System.nanoTime();
         start();
+        mediaMetadataRetriever.setDataSource(path);
+        binding.seekbar.setMax(100);
+        binding.seekbar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                long d = mVideoDecodeMediaFormat.getLong(MediaFormat.KEY_DURATION);
+                float q = progress * 1.0f / 100;
+                byte[] nv21 = native_seek_time(q);
+                if (nv21 != null) {
+                    Bitmap bitmap = nv21ToBitmap(nv21, mVideoSrcWidth, mVideoSrcHeight);
+                    binding.image.setImageBitmap(bitmap);
+                }
+//                Bitmap bitmap = mediaMetadataRetriever.getFrameAtTime((long) (d * q));
+//                binding.image.setImageBitmap(bitmap);
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+
+            }
+        });
     }
 
     /**
@@ -122,13 +155,13 @@ public class MainActivity extends AppCompatActivity {
      */
     private void initVideoEncode() {
         try {
-            int width = mVideoDecodeMediaFormat.getInteger(MediaFormat.KEY_WIDTH);
-            int height = mVideoDecodeMediaFormat.getInteger(MediaFormat.KEY_HEIGHT);
+            mVideoSrcWidth = mVideoDecodeMediaFormat.getInteger(MediaFormat.KEY_WIDTH);
+            mVideoSrcHeight = mVideoDecodeMediaFormat.getInteger(MediaFormat.KEY_HEIGHT);
             mVideoEncode = MediaCodec.createEncoderByType(mVideoDecodeMediaFormat.getString(MediaFormat.KEY_MIME));
-            mVideoEncodeMediaFormat = MediaFormat.createVideoFormat(mVideoDecodeMediaFormat.getString(MediaFormat.KEY_MIME), width, height);
+            mVideoEncodeMediaFormat = MediaFormat.createVideoFormat(mVideoDecodeMediaFormat.getString(MediaFormat.KEY_MIME), mVideoSrcWidth, mVideoSrcHeight);
             // 编码器输入是NV12格式
             mVideoEncodeMediaFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
-            mVideoEncodeMediaFormat.setInteger(MediaFormat.KEY_BIT_RATE, width * height * 3);
+            mVideoEncodeMediaFormat.setInteger(MediaFormat.KEY_BIT_RATE, mVideoSrcWidth * mVideoSrcHeight * 3);
             mVideoEncodeMediaFormat.setInteger(MediaFormat.KEY_FRAME_RATE, mVideoDecodeMediaFormat.getInteger(MediaFormat.KEY_FRAME_RATE));
             mVideoEncodeMediaFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
             mVideoEncodeMediaFormat.setInteger(MediaFormat.KEY_SAMPLE_RATE, 44100);
@@ -217,7 +250,7 @@ public class MainActivity extends AppCompatActivity {
     /**
      * 开始视频编解码
      */
-    private void start(){
+    private void start() {
         mVideoDecode.start();
         mVideoEncode.start();
     }
@@ -225,7 +258,7 @@ public class MainActivity extends AppCompatActivity {
     /**
      * 全部结束
      */
-    private void stopAll(){
+    private void stopAll() {
         mVideoEncode.stop();
         mVideoDecode.stop();
         mediaMuxer.stop();
@@ -233,10 +266,11 @@ public class MainActivity extends AppCompatActivity {
 
     /**
      * 直接写入音频流数据
+     *
      * @param buffer
      * @param info
      */
-    private void writeAudioData(ByteBuffer buffer,MediaCodec.BufferInfo info){
+    private void writeAudioData(ByteBuffer buffer, MediaCodec.BufferInfo info) {
         int size = mAudioMediaExtractor.readSampleData(buffer, 0);
         info.size = size;
         info.presentationTimeUs = mAudioMediaExtractor.getSampleTime();
@@ -253,9 +287,9 @@ public class MainActivity extends AppCompatActivity {
                 mediaMuxer.start();
                 isMediaMuxerStatr = true;
                 MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
-                writeAudioData(mAudioByteBuffer,info);
+                writeAudioData(mAudioByteBuffer, info);
                 while (mAudioMediaExtractor.advance()) {
-                   writeAudioData(mAudioByteBuffer,info);
+                    writeAudioData(mAudioByteBuffer, info);
                 }
                 audioEncodeStop = true;
                 if (videoEncodeStop && !isStop) {
@@ -380,8 +414,8 @@ public class MainActivity extends AppCompatActivity {
         binding.videoView.setMediaController(mediaController);
         binding.videoView.setVideoPath(filterPath);
         binding.videoView.start();
-        binding.srcVideoView.setVideoPath(getFilesDir().getAbsolutePath() + "/" + M_FILE_NAME);
-        binding.srcVideoView.start();
+//        binding.srcVideoView.setVideoPath(getFilesDir().getAbsolutePath() + "/" + M_FILE_NAME);
+//        binding.srcVideoView.start();
     }
 
 
@@ -391,6 +425,8 @@ public class MainActivity extends AppCompatActivity {
 
     public native void native_filter_logo(String path);
 
+    public native byte[] native_seek_time(double time);
+
     public native void i420ToNv21(byte[] i420, int w, int h, byte[] nv21);
 
     public native void nv21ToI420(byte[] nv21, int w, int h, byte[] i420);
@@ -398,7 +434,7 @@ public class MainActivity extends AppCompatActivity {
 
     void copyAssetsToFilePath() {
         try {
-            InputStream is = getAssets().open("gulou.mp4");
+            InputStream is = getAssets().open("test.mp4");
             String filesDirPath = getFilesDir().getAbsolutePath();
             mMp4File = new File(filesDirPath + "/" + M_FILE_NAME);
             FileOutputStream fos = new FileOutputStream(mMp4File);
@@ -519,5 +555,21 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         return data;
+    }
+
+    private static Bitmap nv21ToBitmap(byte[] nv21, int width, int height) {
+        Bitmap bitmap = null;
+        try {
+            YuvImage image = new YuvImage(nv21, ImageFormat.NV21, width, height, null);
+            ByteArrayOutputStream stream = new ByteArrayOutputStream();
+            //输出到对应流
+            image.compressToJpeg(new Rect(0, 0, width, height), 100, stream);
+            //对应字节流生成bitmap
+            bitmap = BitmapFactory.decodeByteArray(stream.toByteArray(), 0, stream.size());
+            stream.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return bitmap;
     }
 }

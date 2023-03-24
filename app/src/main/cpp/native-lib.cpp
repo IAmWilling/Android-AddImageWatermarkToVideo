@@ -29,11 +29,13 @@ void i420ToNv21(jbyte *src_i420_data, jint width, jint height, jbyte *src_nv21_d
 
 void free(void *opaque, uint8_t *data);
 
-void i420ToPng(uint8_t *i420);
+void yuvToPng(uint8_t *src,AVPixelFormat src_format);
 
 void frameToPng(AVFrame *frame, const char *png_path);
 
 void mirrorI420(uint8_t *src_i420_data, jint width, jint height, uint8_t *dst_i420_data);
+
+uint8_t *seek_time_to_yuv(double time);
 
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -127,6 +129,63 @@ int init_decode() {
     return 1;
 }
 
+
+uint8_t *seek_time_to_yuv(double percentage) {
+    AVRational time_base = fmt_ctx->streams[videoIdx]->time_base;
+    double duration = fmt_ctx->streams[videoIdx]->duration * av_q2d(time_base);
+    double timestamp = percentage * duration;
+    int64_t pts = timestamp / av_q2d(time_base);
+    int ret = av_seek_frame(fmt_ctx, videoIdx, pts, AVSEEK_FLAG_BACKWARD);
+    if (ret < 0) {
+        return nullptr;
+    }
+    AVPacket *pkt = av_packet_alloc();
+    while (av_read_frame(fmt_ctx, pkt) >= 0) {
+        if (pkt->stream_index == videoIdx) {
+            ret = avcodec_send_packet(decode_ctx, pkt);
+            if (ret < 0) {
+                char *str = av_err2str(ret);
+                return nullptr;
+            }
+            AVFrame *seek_frame = av_frame_alloc();
+            ret = avcodec_receive_frame(decode_ctx, seek_frame);
+            if (ret < 0) {
+                char *str = av_err2str(ret);
+                return nullptr;
+            }
+            int width = video_parametres->width;
+            int height = video_parametres->height;
+            AVFrame *nv21_frame = av_frame_alloc();
+            uint8_t *out_buf = (uint8_t *) av_malloc(
+                    av_image_get_buffer_size(AV_PIX_FMT_NV21, width,
+                                             height, 1));
+            av_image_fill_arrays(nv21_frame->data, nv21_frame->linesize, out_buf,
+                                 AV_PIX_FMT_NV21,
+                                 width, height, 1);
+            SwsContext *sws_ctx = sws_getContext(width, height,
+                                                 (AVPixelFormat) video_parametres->format,
+                                                 width, height,
+                                                 AV_PIX_FMT_NV21, SWS_BICUBIC,
+                                                 nullptr, nullptr, nullptr);
+            sws_scale(sws_ctx, seek_frame->data, seek_frame->linesize, 0, height,
+                      nv21_frame->data, nv21_frame->linesize);
+
+            int y_size = width * height;
+            int uv_size = y_size / 4;
+            memcpy(out_buf, nv21_frame->data[0], y_size);
+            memcpy(out_buf + y_size, nv21_frame->data[1], uv_size * 2);
+            av_packet_free(&pkt);
+            av_frame_free(&nv21_frame);
+            return out_buf;
+
+        }
+    }
+
+    return nullptr;
+
+}
+
+
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_mt_mediacodec2demo_MainActivity_native_1find_1video_1info(JNIEnv *env, jobject thiz,
@@ -148,6 +207,7 @@ Java_com_mt_mediacodec2demo_MainActivity_native_1find_1video_1info(JNIEnv *env, 
         }
     }
     video_parametres = fmt_ctx->streams[videoIdx]->codecpar;
+    init_decode();
 }
 extern "C"
 JNIEXPORT void JNICALL
@@ -224,7 +284,6 @@ Java_com_mt_mediacodec2demo_MainActivity_native_1filter(JNIEnv *env, jobject thi
                       i420_frame->data, i420_frame->linesize);
 
 
-
             uint8_t *i420_data = (uint8_t *) malloc(y_size * 3 / 2);
             memcpy(i420_data, i420_frame->data[0], y_size);
             memcpy(i420_data + y_size, i420_frame->data[1], uv_size);
@@ -297,10 +356,10 @@ void i420ToNv21(jbyte *src_i420_data, jint width, jint height, jbyte *src_nv21_d
             width, height);
 }
 
-void i420ToPng(uint8_t *i420) {
+void yuvToPng(uint8_t *src,AVPixelFormat src_format) {
     AVFrame *yuv_frame = av_frame_alloc();
     AVFrame *rgb_frame = av_frame_alloc();
-    const char *png_path = "/data/user/0/com.mt.mediacodec2demo/files/filter_test.png";
+    const char *png_path = "/data/user/0/com.mt.mediacodec2demo/files/test.png";
 
     FILE *file = fopen(png_path, "w+");
 
@@ -331,11 +390,11 @@ void i420ToPng(uint8_t *i420) {
                          ctx->width, ctx->height, 1);
 
 
-    av_image_fill_arrays(yuv_frame->data, yuv_frame->linesize, i420,
-                         AV_PIX_FMT_YUV420P, video_parametres->width,
+    av_image_fill_arrays(yuv_frame->data, yuv_frame->linesize, src,
+                         AV_PIX_FMT_NV21, video_parametres->width,
                          video_parametres->height, 1);
 
-    SwsContext *swx_ctx = sws_getContext(ctx->width, ctx->height, AV_PIX_FMT_YUV420P, ctx->width,
+    SwsContext *swx_ctx = sws_getContext(ctx->width, ctx->height, src_format, ctx->width,
                                          ctx->height, AV_PIX_FMT_RGB24, SWS_BICUBIC,
                                          nullptr, nullptr, nullptr);
     rgb_frame->format = AV_PIX_FMT_RGB24;
@@ -477,10 +536,6 @@ void mirrorI420(uint8_t *src_i420_data, jint width, jint height, uint8_t *dst_i4
 }
 
 
-
-
-
-
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_mt_mediacodec2demo_MainActivity_nv21ToI420(JNIEnv *env, jobject thiz, jbyteArray nv21,
@@ -490,4 +545,22 @@ Java_com_mt_mediacodec2demo_MainActivity_nv21ToI420(JNIEnv *env, jobject thiz, j
     // nv21转化为i420
     nv21ToI420(src_nv21_data, w, h, dst_i420_data);
     env->ReleaseByteArrayElements(i420, dst_i420_data, 0);
+}
+
+
+
+extern "C"
+JNIEXPORT jbyteArray JNICALL
+Java_com_mt_mediacodec2demo_MainActivity_native_1seek_1time(JNIEnv *env, jobject thiz,
+                                                            jdouble time) {
+    uint8_t *nv21 = seek_time_to_yuv(time);
+    if (!nv21) {
+        return nullptr;
+    }
+//    yuvToPng(nv21,AV_PIX_FMT_NV21);
+    int y_size = video_parametres->width * video_parametres->height;
+    jbyteArray array = env->NewByteArray(y_size * 3 / 2);
+    env->SetByteArrayRegion(array, 0, y_size * 3 / 2, (jbyte *) (nv21));
+    av_free(nv21);
+    return array;
 }
